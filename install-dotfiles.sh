@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-progress=()
+GH_SSH_KEY_EXISTS=0
 
 LOGO="
  _____ _     _ _
@@ -14,24 +14,17 @@ function write_header() {
   gum style --foreground 212 "$LOGO"
 }
 
-function write_progress() {
-  clear
-  write_header
-
-  for line in "${progress[@]}"; do
-    gum style --foreground 82 "✅ ${line}"
-  done
-}
-
 function step_start() {
-  write_progress
-  echo
-  gum style --foreground 212 "$1..."
+  gum style --foreground 90 "$1..."
 }
 
 function step_end() {
-  progress+=("$1")
-  write_progress
+  gum style --foreground 82 "✅ $1"
+}
+
+function exit_with_error() {
+  gum style --foreground 31 "$1"
+  exit 1
 }
 
 function install_required_packages() {
@@ -77,25 +70,27 @@ function install_required_packages() {
 }
 
 function configure_bitwarden_and_login() {
-  step_start "Configuring Bitwarden and logging in"
+  if [ $GH_SSH_KEY_EXISTS -eq 0 ]; then
+    step_start "Configuring Bitwarden and logging in"
 
-  bw config server https://vault.bitwarden.eu >/dev/null 2>&1
+    bw config server https://vault.bitwarden.eu >/dev/null 2>&1
 
-  bw login --check --quiet
-  if [ $? -eq 0 ]; then
-    if [ -z "$BW_SESSION" ]; then
-      export BW_SESSION=$(bw unlock --pretty --raw)
+    bw login --check --quiet
+    if [ $? -eq 0 ]; then
+      if [ -z "$BW_SESSION" ]; then
+        export BW_SESSION=$(bw unlock --pretty --raw)
+      fi
+    else
+      export BW_SESSION=$(bw login --pretty --method 0 --raw)
     fi
-  else
-    export BW_SESSION=$(bw login --pretty --method 0 --raw)
+
+
+    if [ -z "$BW_SESSION" ]; then
+      exit 1
+    fi
+
+    step_end "Bitwarden Setup and Login"
   fi
-
-
-  if [ -z "$BW_SESSION" ]; then
-    exit 1
-  fi
-
-  step_end "Bitwarden Setup and Login"
 }
 
 function test_github_access() {
@@ -111,27 +106,53 @@ function test_github_access() {
   step_end "Access to Github is working"
 }
 
-function save_ssh_key() {
-  step_start "Setup SSH Key for Github"
+function check_existing_ssh_key(){
+  local ssh_fingerprint="SHA256:RE4CdmyXlKOgrYtyeiQ+I0W3je1KU82hCWOEoxYs69c"
 
-  mkdir -p $HOME/.ssh
-  chmod 700 $HOME/.ssh
-  ssh_key=$(bw get item ag@20251008 | jq .sshKey)
-  if [ -z "ssh_key" ]; then
-    echo "Failed loading SSH Key"
-    exit 1
+  if [ -f $HOME/.ssh/id_ed25519 ]; then
+      ssh-keygen  -l -f $HOME/.ssh/id_ed25519 | grep "${ssh_fingerprint}" >/dev/null
+    if [ $? -eq 0 ]; then
+      GH_SSH_KEY_EXISTS=1
+    else
+      exit_with_error "Unknown SSH Key $HOME/.ssh/id_ed25519 exists."
+    fi
   fi
+}
 
-  echo $ssh_key | jq -r .privateKey > $HOME/.ssh/id_ed25519
-  echo $ssh_key | jq -r .publicKey > $HOME/.ssh/id_ed25519.pub
-  chmod 600 $HOME/.ssh/id_ed25519*
 
-  step_end "SSH Key for Github is setup"
+function save_ssh_key() {
+  if [ $GH_SSH_KEY_EXISTS -eq 0 ]; then
+    step_start "Setup SSH Key for Github"
+
+    mkdir -p $HOME/.ssh
+    chmod 700 $HOME/.ssh
+    ssh_key=$(bw get item ag@20251008 | jq .sshKey)
+    if [ -z "ssh_key" ]; then
+      echo "Failed loading SSH Key"
+      exit 1
+    fi
+
+    echo $ssh_key | jq -r .privateKey > $HOME/.ssh/id_ed25519
+    echo $ssh_key | jq -r .publicKey > $HOME/.ssh/id_ed25519.pub
+    chmod 600 $HOME/.ssh/id_ed25519*
+
+    step_end "SSH Key for Github is setup"
+  fi
+}
+
+function install_dotfiles() {
+  step_start "Installing dotfiles..."
+  chezmoi init git@github.com:3bit/dotfiles.git
+  chezmoi apply
+  step_end "Done installing dotfiles."
 }
 
 clear
 
+write_header
 install_required_packages
+check_existing_ssh_key
 configure_bitwarden_and_login
 save_ssh_key
 test_github_access
+install_dotfiles
