@@ -143,7 +143,7 @@ function save_ssh_key() {
 function install_dotfiles() {
   step_start "Installing dotfiles..."
   chezmoi init git@github.com:3bit/dotfiles.git
-  chezmoi apply
+  #chezmoi apply
   step_end "Done installing dotfiles."
 }
 
